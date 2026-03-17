@@ -42,6 +42,15 @@ def create_tables() -> None:
             );
             """
         )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS weekly_checkins (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                date TEXT NOT NULL UNIQUE,
+                actual_weight_lbs REAL
+            );
+            """
+        )
         _ensure_profile_columns(conn)
 
 
@@ -53,6 +62,8 @@ def _ensure_profile_columns(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE profile ADD COLUMN goal_type TEXT;")
     if "target_weight_lbs" not in existing_cols:
         conn.execute("ALTER TABLE profile ADD COLUMN target_weight_lbs REAL;")
+
+
 
 
 def get_profile() -> Optional[dict]:
@@ -147,6 +158,30 @@ def upsert_daily_log(date_str: str, calories_consumed: float, daily_balance: flo
 def delete_daily_log(date_str: str) -> None:
     with get_connection() as conn:
         conn.execute("DELETE FROM daily_logs WHERE date = ?;", (date_str,))
+
+
+def get_weekly_checkins() -> pd.DataFrame:
+    with get_connection() as conn:
+        df = pd.read_sql_query("SELECT * FROM weekly_checkins ORDER BY date;", conn)
+    return df
+
+
+def upsert_weekly_checkin(date_str: str, actual_weight_lbs: float) -> None:
+    with get_connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO weekly_checkins (date, actual_weight_lbs)
+            VALUES (?, ?)
+            ON CONFLICT(date) DO UPDATE SET
+                actual_weight_lbs = excluded.actual_weight_lbs;
+            """,
+            (date_str, actual_weight_lbs),
+        )
+
+
+def delete_weekly_checkin(date_str: str) -> None:
+    with get_connection() as conn:
+        conn.execute("DELETE FROM weekly_checkins WHERE date = ?;", (date_str,))
 
 
 def update_running_balances() -> None:
