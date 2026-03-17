@@ -12,15 +12,33 @@ import database as db
 
 st.set_page_config(page_title="Calorie Bank", layout="wide")
 
-
-db.create_tables()
-
-
 st.title("Calorie Bank")
+
+st.sidebar.header("Account")
+user_id_input = st.sidebar.text_input(
+    "User ID",
+    value=st.session_state.get("user_id", ""),
+    help="Used to keep each person's data separate on Streamlit.",
+)
+user_id = user_id_input.strip()
+if user_id:
+    st.session_state["user_id"] = user_id
+else:
+    st.info("Enter a User ID in the sidebar to load your data.")
+    st.stop()
+
+if db.legacy_db_exists() and not db.user_db_exists(user_id):
+    st.sidebar.caption("Found shared data from an older version of the app.")
+    if st.sidebar.button("Import shared data into this user"):
+        db.import_legacy_db(user_id)
+        st.sidebar.success("Imported shared data for this user.")
+        st.rerun()
+
+db.create_tables(user_id)
 
 # Sidebar: Profile setup
 st.sidebar.header("Profile Setup")
-profile = db.get_profile()
+profile = db.get_profile(user_id)
 
 activity_options = [
     ("Sedentary (1.2) - little or no exercise", 1.2),
@@ -116,6 +134,7 @@ if st.sidebar.button("Save Profile"):
     bmr = calc.bmr_mifflin_st_jeor(weight_kg, height_cm, int(age), gender)
     maintenance = calc.maintenance_calories(bmr, activity_multiplier)
     db.save_profile(
+        user_id,
         int(age),
         gender,
         height_cm,
@@ -125,9 +144,9 @@ if st.sidebar.button("Save Profile"):
         goal_type,
         target_weight_lbs,
     )
-    db.update_all_daily_balances(maintenance)
+    db.update_all_daily_balances(user_id, maintenance)
     st.sidebar.success("Profile saved.")
-    profile = db.get_profile()
+    profile = db.get_profile(user_id)
     st.rerun()
 
 
@@ -143,7 +162,7 @@ tab_dashboard, tab_entries = st.tabs(["Dashboard", "Entries"])
 
 with tab_dashboard:
     # Pull logs
-    logs_df = db.get_daily_logs()
+    logs_df = db.get_daily_logs(user_id)
     if not logs_df.empty:
         logs_df = logs_df.sort_values("date")
         running_balance = float(logs_df["running_balance"].iloc[-1])
@@ -303,7 +322,7 @@ with tab_dashboard:
 
         today = dt.date.today()
 
-        existing_today_log = db.get_log_by_date(today.isoformat())
+        existing_today_log = db.get_log_by_date(user_id, today.isoformat())
         pre_fill_calories = int(round(existing_today_log["calories_consumed"])) if existing_today_log else 0
 
         with st.form("daily_entry_form"):
@@ -319,14 +338,16 @@ with tab_dashboard:
 
         if submitted:
             daily_bal = calc.daily_balance(maintenance, calories_consumed)
-            db.upsert_daily_log(entry_date.isoformat(), calories_consumed, daily_bal)
-            db.update_running_balances()
+            db.upsert_daily_log(
+                user_id, entry_date.isoformat(), calories_consumed, daily_bal
+            )
+            db.update_running_balances(user_id)
             st.session_state["entry_saved"] = True
             st.session_state["last_goal_adjusted"] = daily_bal if goal_type == "Lose" else -daily_bal
             st.rerun()
 
     # Refresh logs after entry
-    logs_df = db.get_daily_logs()
+    logs_df = db.get_daily_logs(user_id)
 
     with left_col:
         if not logs_df.empty:
@@ -362,7 +383,11 @@ with tab_dashboard:
             tick_vals = logs_df["date"]
             tick_text = [d.strftime("%b %d, %Y") for d in tick_vals]
             fig_weight.update_xaxes(tickmode="array", tickvals=tick_vals, ticktext=tick_text)
-            st.plotly_chart(fig_weight, use_container_width=True)
+            st.plotly_chart(
+                fig_weight,
+                use_container_width=True,
+                config={"staticPlot": True},
+            )
         else:
             st.info("No logs yet. Add your first entry to see progress.")
 
@@ -400,7 +425,7 @@ with tab_dashboard:
                         "predicted_lbs": predicted_lbs.values,
                     }
                 )
-                actuals_df = db.get_weekly_checkins()
+                actuals_df = db.get_weekly_checkins(user_id)
                 if not actuals_df.empty:
                     actuals_df["date"] = pd.to_datetime(actuals_df["date"]).dt.date
                     checkins_df = checkins_df.merge(
@@ -457,21 +482,21 @@ with tab_dashboard:
                         date_str = date_val.isoformat()
                         actual_val = row.get("actual")
                         if pd.isna(actual_val):
-                            db.delete_weekly_checkin(date_str)
+                            db.delete_weekly_checkin(user_id, date_str)
                             continue
                         actual_lbs = (
                             calc.kg_to_lbs(float(actual_val))
                             if unit_system == "Metric"
                             else float(actual_val)
                         )
-                        db.upsert_weekly_checkin(date_str, actual_lbs)
+                        db.upsert_weekly_checkin(user_id, date_str, actual_lbs)
 
                     st.success("Weekly check-ins updated.")
                     st.rerun()
 
 with tab_entries:
     st.subheader("All Entries")
-    logs_df = db.get_daily_logs()
+    logs_df = db.get_daily_logs(user_id)
     if logs_df.empty:
         st.info("No entries to show yet.")
     else:
@@ -509,14 +534,14 @@ with tab_entries:
                     continue
 
                 if row.get("delete") == True:
-                    db.delete_daily_log(date_str)
+                    db.delete_daily_log(user_id, date_str)
                     continue
                 if pd.isna(row.get("calories_consumed")):
                     continue
                 calories = int(round(row["calories_consumed"]))
                 daily_bal = calc.daily_balance(maintenance, calories)
-                db.upsert_daily_log(date_str, calories, daily_bal)
-            db.update_running_balances()
+                db.upsert_daily_log(user_id, date_str, calories, daily_bal)
+            db.update_running_balances(user_id)
             st.success("Entries updated.")
             st.rerun()
 
@@ -545,3 +570,4 @@ with tab_entries:
                 if st.button("Cancel"):
                     st.session_state.pop("show_delete_confirm", None)
                     st.session_state.pop("pending_edits", None)
+
