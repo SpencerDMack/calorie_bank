@@ -35,7 +35,7 @@ def weight_change_lbs(running_balance: float) -> float:
 
 
 def estimated_weight(start_weight_lbs: float, running_balance: float) -> float:
-    return start_weight_lbs - weight_change_lbs(running_balance)
+    return round(start_weight_lbs - weight_change_lbs(running_balance), 1)
 
 
 def weekly_deficit_target() -> float:

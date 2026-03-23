@@ -12,42 +12,23 @@ import database as db
 
 st.set_page_config(page_title="Calorie Bank", layout="wide")
 
+db.create_tables()
+
 st.title("Calorie Bank")
-
-st.sidebar.header("Account")
-user_id_input = st.sidebar.text_input(
-    "User ID",
-    value=st.session_state.get("user_id", ""),
-    help="Used to keep each person's data separate on Streamlit.",
-)
-user_id = user_id_input.strip()
-if user_id:
-    st.session_state["user_id"] = user_id
-else:
-    st.info("Enter a User ID in the sidebar to load your data.")
-    st.stop()
-
-if db.legacy_db_exists() and not db.user_db_exists(user_id):
-    st.sidebar.caption("Found shared data from an older version of the app.")
-    if st.sidebar.button("Import shared data into this user"):
-        db.import_legacy_db(user_id)
-        st.sidebar.success("Imported shared data for this user.")
-        st.rerun()
-
-db.create_tables(user_id)
 
 # Sidebar: Profile setup
 st.sidebar.header("Profile Setup")
-profile = db.get_profile(user_id)
+profile = db.get_profile()
 
 activity_options = [
-    ("Sedentary (1.2) - little or no exercise", 1.2),
-    ("Light (1.375) - light exercise 1-3 days/week", 1.375),
-    ("Moderate (1.55) - moderate exercise 3-5 days/week", 1.55),
-    ("Very Active (1.725) - hard exercise 6-7 days/week", 1.725),
+    ("Little or no exercise", 1.2),
+    ("Light exercise 1-3 days/week", 1.375),
+    ("Moderate exercise 3-5 days/week", 1.55),
+    ("Hard exercise 6-7 days/week", 1.725),
 ]
 
 if profile:
+    default_name = profile.get("name") or ""
     default_age = int(profile["age"])
     default_gender = profile["gender"]
     default_height = float(profile["height_cm"])
@@ -60,6 +41,7 @@ if profile:
         else default_weight
     )
 else:
+    default_name = ""
     default_age = 30
     default_gender = "Male"
     default_height = 170.0
@@ -68,6 +50,7 @@ else:
     default_goal_type = "Lose"
     default_target_weight = default_weight
 
+name = st.sidebar.text_input("Name", value=default_name)
 age = st.sidebar.number_input("Age", min_value=10, max_value=120, value=default_age, step=1)
 
 if default_gender.lower() == "female":
@@ -77,47 +60,36 @@ else:
 
 gender = st.sidebar.selectbox("Gender", ["Male", "Female"], index=gender_index)
 
-# Unit system toggle (affects both height and weight)
-unit_system = st.sidebar.radio("Units", ["Imperial", "Metric"], horizontal=True)
-
-if unit_system == "Metric":
-    default_height_cm = int(round(default_height))
-    default_weight_kg = round(calc.lbs_to_kg(default_weight), 1)
-    default_target_kg = int(round(calc.lbs_to_kg(default_target_weight)))
-    height_cm = st.sidebar.number_input(
-        "Height (cm)", min_value=100, max_value=250, value=default_height_cm, step=1
-    )
-    weight_kg = st.sidebar.number_input(
-        "Weight (kg)", min_value=35.0, max_value=250.0, value=default_weight_kg, step=0.1
-    )
-    weight_lbs = calc.kg_to_lbs(weight_kg)
-else:
-    total_inches = int(round(default_height / 2.54))
-    default_feet = total_inches // 12
-    default_inches = total_inches % 12
-    feet_col, inch_col = st.sidebar.columns(2)
-    height_feet = feet_col.number_input(
-        "Height (ft)", min_value=3, max_value=8, value=default_feet, step=1
-    )
-    height_inches = inch_col.number_input(
-        "Height (in)", min_value=0, max_value=11, value=default_inches, step=1
-    )
-    height_cm = calc.feet_in_to_cm(height_feet, height_inches)
-    weight_lbs = st.sidebar.number_input(
-        "Weight (lbs)", min_value=80.0, max_value=500.0, value=round(default_weight, 1), step=0.1
-    )
+# Height and weight (Imperial only)
+total_inches = int(round(default_height / 2.54))
+default_feet = total_inches // 12
+default_inches = total_inches % 12
+feet_col, inch_col = st.sidebar.columns(2)
+height_feet = feet_col.number_input(
+    "Height (ft)", min_value=3, max_value=8, value=default_feet, step=1
+)
+height_inches = inch_col.number_input(
+    "Height (in)", min_value=0, max_value=11, value=default_inches, step=1
+)
+height_cm = calc.feet_in_to_cm(height_feet, height_inches)
+weight_lbs = st.sidebar.number_input(
+    "Starting Weight (lbs)",
+    min_value=80.0,
+    max_value=500.0,
+    value=round(default_weight, 1),
+    step=0.1,
+    format="%.1f",
+)
 
 st.sidebar.subheader("Goal")
 goal_type = st.sidebar.selectbox("Goal Type", ["Lose", "Gain"], index=0 if default_goal_type == "Lose" else 1)
-if unit_system == "Metric":
-    target_weight_kg = st.sidebar.number_input(
-        "Target Weight (kg)", min_value=35, max_value=250, value=default_target_kg, step=1
-    )
-    target_weight_lbs = calc.kg_to_lbs(target_weight_kg)
-else:
-    target_weight_lbs = st.sidebar.number_input(
-        "Target Weight (lbs)", min_value=80, max_value=500, value=int(round(default_target_weight)), step=1
-    )
+target_weight_lbs = st.sidebar.number_input(
+    "Target Weight (lbs)",
+    min_value=80,
+    max_value=500,
+    value=int(round(default_target_weight)),
+    step=1,
+)
 
 activity_labels = [label for label, _ in activity_options]
 activity_values = [value for _, value in activity_options]
@@ -130,11 +102,12 @@ activity_label = st.sidebar.selectbox("Activity Level", activity_labels, index=a
 activity_multiplier = dict(activity_options)[activity_label]
 
 if st.sidebar.button("Save Profile"):
+    cleaned_name = name.strip() or None
     weight_kg = calc.lbs_to_kg(weight_lbs)
     bmr = calc.bmr_mifflin_st_jeor(weight_kg, height_cm, int(age), gender)
     maintenance = calc.maintenance_calories(bmr, activity_multiplier)
     db.save_profile(
-        user_id,
+        cleaned_name,
         int(age),
         gender,
         height_cm,
@@ -144,9 +117,9 @@ if st.sidebar.button("Save Profile"):
         goal_type,
         target_weight_lbs,
     )
-    db.update_all_daily_balances(user_id, maintenance)
+    db.update_all_daily_balances(maintenance)
     st.sidebar.success("Profile saved.")
-    profile = db.get_profile(user_id)
+    profile = db.get_profile()
     st.rerun()
 
 
@@ -158,11 +131,16 @@ maintenance = float(profile["maintenance_calories"])
 starting_weight = float(profile["weight_lbs"])
 goal_type = profile.get("goal_type") or "Lose"
 
-tab_dashboard, tab_entries = st.tabs(["Dashboard", "Entries"])
+tab_dashboard, tab_entries, tab_simulation = st.tabs(["Dashboard", "Entries", "Simulation"])
 
 with tab_dashboard:
+    display_name = (profile.get("name") or "").strip()
+    if display_name:
+        st.markdown(f"### Welcome back, {display_name}!")
+    else:
+        st.markdown("### Welcome back!")
     # Pull logs
-    logs_df = db.get_daily_logs(user_id)
+    logs_df = db.get_daily_logs()
     if not logs_df.empty:
         logs_df = logs_df.sort_values("date")
         running_balance = float(logs_df["running_balance"].iloc[-1])
@@ -178,27 +156,6 @@ with tab_dashboard:
         if profile.get("target_weight_lbs") is not None
         else starting_weight
     )
-    # Streak: consecutive logged days meeting goal
-    streak_days = 0
-    if not logs_df.empty:
-        streak_df = logs_df.copy()
-        streak_df["date"] = pd.to_datetime(streak_df["date"]).dt.date
-        streak_df = streak_df.sort_values("date")
-        if goal_type == "Lose":
-            streak_df["goal_met"] = streak_df["daily_balance"] >= 0
-        else:
-            streak_df["goal_met"] = streak_df["daily_balance"] <= 0
-
-        last_row = streak_df.iloc[-1]
-        if last_row["goal_met"]:
-            streak_days = 1
-            current_date = last_row["date"]
-            for _, row in streak_df.iloc[:-1].iloc[::-1].iterrows():
-                expected_date = current_date - dt.timedelta(days=1)
-                if row["date"] != expected_date or not row["goal_met"]:
-                    break
-                streak_days += 1
-                current_date = row["date"]
     goal_calories = abs(starting_weight - target_weight) * 3500.0
     remaining_calories = max(0.0, goal_calories - max(0.0, bank_balance))
     avg_daily_progress = None
@@ -277,11 +234,7 @@ with tab_dashboard:
         else:
             st.progress(weight_progress, text=f"Weight progress: {weight_progress:.0%}")
 
-        days_col, streak_col = st.columns(2)
-        with days_col:
-            st.metric("Estimated days to goal", days_text)
-        with streak_col:
-            st.metric("On-goal streak (days)", f"{streak_days}")
+        st.metric("Estimated days to goal", days_text)
         if goal_calories > 0 and avg_daily_progress is not None and avg_daily_progress > 0:
             st.caption("Based on your average over the last 7 entries.")
 
@@ -322,8 +275,11 @@ with tab_dashboard:
 
         today = dt.date.today()
 
-        existing_today_log = db.get_log_by_date(user_id, today.isoformat())
-        pre_fill_calories = int(round(existing_today_log["calories_consumed"])) if existing_today_log else 0
+        if goal_type == "Lose":
+            pre_fill_calories = int(math.floor(maintenance / 1000.0) * 1000)
+        else:
+            pre_fill_calories = int(math.ceil(maintenance / 1000.0) * 1000)
+        pre_fill_note = ""
 
         with st.form("daily_entry_form"):
             entry_date = st.date_input("Date", value=today)
@@ -334,26 +290,78 @@ with tab_dashboard:
                 value=pre_fill_calories,
                 step=1,
             )
+            entry_note = st.text_area("Note (optional)", value=pre_fill_note, height=90)
             submitted = st.form_submit_button("Save Entry")
 
         if submitted:
             daily_bal = calc.daily_balance(maintenance, calories_consumed)
+            cleaned_entry_note = entry_note.strip() or None
             db.upsert_daily_log(
-                user_id, entry_date.isoformat(), calories_consumed, daily_bal
+                entry_date.isoformat(), calories_consumed, daily_bal, cleaned_entry_note
             )
-            db.update_running_balances(user_id)
+            db.update_running_balances()
             st.session_state["entry_saved"] = True
             st.session_state["last_goal_adjusted"] = daily_bal if goal_type == "Lose" else -daily_bal
             st.rerun()
 
+        st.subheader("Weekly Win")
+        today = dt.date.today()
+        weekly_logs = db.get_daily_logs()
+        if weekly_logs.empty:
+            st.info("Log at least one day to see your weekly summary.")
+        else:
+            weekly_df = weekly_logs.copy()
+            weekly_df["date"] = pd.to_datetime(weekly_df["date"]).dt.date
+            first_log_date = weekly_df["date"].min()
+            last_log_date = weekly_df["date"].max()
+            week_end = last_log_date
+            days_since_start = (week_end - first_log_date).days
+            if days_since_start < 0:
+                week_start = first_log_date
+            else:
+                week_start = first_log_date + dt.timedelta(
+                    days=(days_since_start // 7) * 7
+                )
+            week_end_display = week_start + dt.timedelta(days=6)
+            weekly_df = weekly_df[
+                (weekly_df["date"] >= week_start) & (weekly_df["date"] <= week_end_display)
+            ]
+
+            if weekly_df.empty:
+                st.info("No entries in the last 7 days yet.")
+            else:
+                if goal_type == "Lose":
+                    summary_label = "Weekly deficit"
+                    goal_adjusted = weekly_df["daily_balance"]
+                    on_goal_days = int((weekly_df["daily_balance"] >= 0).sum())
+                else:
+                    summary_label = "Weekly surplus"
+                    goal_adjusted = -weekly_df["daily_balance"]
+                    on_goal_days = int((weekly_df["daily_balance"] <= 0).sum())
+
+                total_goal = float(goal_adjusted.sum())
+                avg_cals = float(weekly_df["calories_consumed"].mean())
+                logged_days = int(weekly_df["date"].nunique())
+
+                win_col1, win_col2, win_col3 = st.columns(3)
+                win_col1.metric(summary_label, f"{total_goal:,.0f}")
+                win_col2.metric("Avg calories", f"{avg_cals:,.0f}")
+                win_col3.metric("On-goal days", f"{on_goal_days}/7")
+                st.caption(
+                    f"Week of {week_start.strftime('%b %d')} - {week_end_display.strftime('%b %d')}. "
+                    f"Logged {logged_days} of 7 days."
+                )
+
     # Refresh logs after entry
-    logs_df = db.get_daily_logs(user_id)
+    logs_df = db.get_daily_logs()
 
     with left_col:
         if not logs_df.empty:
             logs_df = logs_df.sort_values("date")
             logs_df["date"] = pd.to_datetime(logs_df["date"])
-            logs_df["estimated_weight"] = starting_weight - (logs_df["running_balance"] / 3500.0)
+            logs_df["estimated_weight"] = (
+                starting_weight - (logs_df["running_balance"] / 3500.0)
+            ).round(1)
 
             st.subheader("Progress Over Time")
 
@@ -362,10 +370,127 @@ with tab_dashboard:
                 go.Scatter(
                     x=logs_df["date"],
                     y=logs_df["estimated_weight"],
+                    customdata=logs_df["calories_consumed"],
                     mode="lines+markers",
+                    marker=dict(size=8),
                     name="Estimated Weight (lbs)",
+                    hovertemplate=(
+                        "Date: %{x|%b %d, %Y}"
+                        "<br>Weight: %{y:.1f} lbs"
+                        "<br>Calories: %{customdata:.0f}"
+                        "<extra></extra>"
+                    ),
                 )
             )
+            # Highlight global and weekly min/max points
+            highlight_df = logs_df.dropna(
+                subset=["estimated_weight", "calories_consumed"]
+            ).copy()
+            if not highlight_df.empty:
+                first_log_date = highlight_df["date"].dt.date.min()
+                last_log_date = highlight_df["date"].dt.date.max()
+                week_end = last_log_date
+                days_since_start = (week_end - first_log_date).days
+                if days_since_start < 0:
+                    week_start = first_log_date
+                else:
+                    week_start = first_log_date + dt.timedelta(
+                        days=(days_since_start // 7) * 7
+                    )
+                week_end_display = week_start + dt.timedelta(days=6)
+
+                global_min_idx = highlight_df["estimated_weight"].idxmin()
+                global_max_idx = highlight_df["estimated_weight"].idxmax()
+
+                weekly_mask = (
+                    (highlight_df["date"].dt.date >= week_start)
+                    & (highlight_df["date"].dt.date <= week_end_display)
+                )
+                weekly_df = highlight_df[weekly_mask]
+                weekly_min_idx = (
+                    weekly_df["estimated_weight"].idxmin() if not weekly_df.empty else None
+                )
+                weekly_max_idx = (
+                    weekly_df["estimated_weight"].idxmax() if not weekly_df.empty else None
+                )
+
+                highlights: dict[int, dict] = {}
+
+                def add_highlight(idx: int | None, label: str, color: str, priority: int, symbol: str) -> None:
+                    if idx is None:
+                        return
+                    row = highlight_df.loc[idx]
+                    entry = highlights.get(idx)
+                    if entry is None:
+                        highlights[idx] = {
+                            "x": row["date"],
+                            "y": row["estimated_weight"],
+                            "calories": row["calories_consumed"],
+                            "labels": [label],
+                            "priority": priority,
+                            "color": color,
+                        }
+                        return
+                    entry["labels"].append(label)
+                    if priority < entry["priority"]:
+                        entry["priority"] = priority
+                        entry["color"] = color
+
+                if global_min_idx == global_max_idx:
+                    add_highlight(
+                        global_min_idx,
+                        "Highest/Lowest Weight",
+                        "mediumpurple",
+                        0,
+                        "circle",
+                    )
+                else:
+                    add_highlight(global_min_idx, "Lowest Weight", "royalblue", 0, "circle")
+                    add_highlight(global_max_idx, "Highest Weight", "goldenrod", 0, "circle")
+
+                if (
+                    weekly_min_idx == weekly_max_idx
+                    and weekly_min_idx is not None
+                    and weekly_min_idx not in {global_min_idx, global_max_idx}
+                ):
+                    add_highlight(
+                        weekly_min_idx,
+                        "Week Min/Max",
+                        "seagreen",
+                        1,
+                        "circle",
+                    )
+                else:
+                    if weekly_min_idx not in {global_min_idx, global_max_idx}:
+                        add_highlight(weekly_min_idx, "Weekly Min", "seagreen", 1, "circle")
+                    if weekly_max_idx not in {global_min_idx, global_max_idx}:
+                        add_highlight(weekly_max_idx, "Weekly Max", "darkorange", 1, "circle")
+
+                for entry in highlights.values():
+                    label_text = " / ".join(entry["labels"])
+                    fig_weight.add_trace(
+                        go.Scatter(
+                            x=[entry["x"]],
+                            y=[entry["y"]],
+                            mode="markers+text",
+                            marker=dict(
+                                size=8,
+                                color=entry["color"],
+                                symbol="circle",
+                            ),
+                            text=[f"<b>{label_text}</b>"],
+                            textposition="top center",
+                            showlegend=False,
+                            customdata=[entry["calories"]],
+                            hovertemplate=(
+                                "Date: %{x|%b %d, %Y}"
+                                "<br>Weight: %{y:.1f} lbs"
+                                "<br>Calories: %{customdata:.0f}"
+                                f"<br>{label_text}"
+                                "<extra></extra>"
+                            ),
+                        )
+                    )
             if total_weight_change > 0:
                 for pct in [0.25, 0.5, 0.75]:
                     milestone_weight = starting_weight + (target_weight - starting_weight) * pct
@@ -379,6 +504,9 @@ with tab_dashboard:
             fig_weight.update_layout(
                 yaxis_title="Estimated Weight (lbs)",
                 margin=dict(l=40, r=40, t=40, b=40),
+                hovermode="closest",
+                dragmode=False,
+                showlegend=False,
             )
             tick_vals = logs_df["date"]
             tick_text = [d.strftime("%b %d, %Y") for d in tick_vals]
@@ -386,7 +514,7 @@ with tab_dashboard:
             st.plotly_chart(
                 fig_weight,
                 use_container_width=True,
-                config={"staticPlot": True},
+                config={"displayModeBar": False, "scrollZoom": False},
             )
         else:
             st.info("No logs yet. Add your first entry to see progress.")
@@ -397,7 +525,7 @@ with tab_dashboard:
         else:
             first_log_date = pd.to_datetime(logs_df["date"]).min().date()
             last_log_date = pd.to_datetime(logs_df["date"]).max().date()
-            end_date = max(dt.date.today(), last_log_date)
+            end_date = last_log_date
             week_dates = []
             current_week = first_log_date + dt.timedelta(days=7)
             while current_week <= end_date:
@@ -425,7 +553,7 @@ with tab_dashboard:
                         "predicted_lbs": predicted_lbs.values,
                     }
                 )
-                actuals_df = db.get_weekly_checkins(user_id)
+                actuals_df = db.get_weekly_checkins()
                 if not actuals_df.empty:
                     actuals_df["date"] = pd.to_datetime(actuals_df["date"]).dt.date
                     checkins_df = checkins_df.merge(
@@ -434,16 +562,9 @@ with tab_dashboard:
                 else:
                     checkins_df["actual_weight_lbs"] = pd.NA
 
-                if unit_system == "Metric":
-                    checkins_df["predicted"] = checkins_df["predicted_lbs"].apply(calc.lbs_to_kg)
-                    checkins_df["actual"] = checkins_df["actual_weight_lbs"].apply(
-                        lambda val: calc.lbs_to_kg(val) if pd.notna(val) else pd.NA
-                    )
-                    weight_unit = "kg"
-                else:
-                    checkins_df["predicted"] = checkins_df["predicted_lbs"]
-                    checkins_df["actual"] = checkins_df["actual_weight_lbs"]
-                    weight_unit = "lbs"
+                checkins_df["predicted"] = checkins_df["predicted_lbs"]
+                checkins_df["actual"] = checkins_df["actual_weight_lbs"]
+                weight_unit = "lbs"
 
                 checkins_df["diff"] = checkins_df["actual"] - checkins_df["predicted"]
                 display_df = checkins_df[["week_start", "predicted", "actual", "diff"]].copy()
@@ -482,28 +603,25 @@ with tab_dashboard:
                         date_str = date_val.isoformat()
                         actual_val = row.get("actual")
                         if pd.isna(actual_val):
-                            db.delete_weekly_checkin(user_id, date_str)
+                            db.delete_weekly_checkin(date_str)
                             continue
-                        actual_lbs = (
-                            calc.kg_to_lbs(float(actual_val))
-                            if unit_system == "Metric"
-                            else float(actual_val)
-                        )
-                        db.upsert_weekly_checkin(user_id, date_str, actual_lbs)
+                        actual_lbs = float(actual_val)
+                        db.upsert_weekly_checkin(date_str, actual_lbs)
 
                     st.success("Weekly check-ins updated.")
                     st.rerun()
 
 with tab_entries:
     st.subheader("All Entries")
-    logs_df = db.get_daily_logs(user_id)
+    logs_df = db.get_daily_logs()
     if logs_df.empty:
         st.info("No entries to show yet.")
     else:
         logs_df = logs_df.sort_values("date")
-        editor_df = logs_df[["date", "calories_consumed"]].copy()
+        editor_df = logs_df[["date", "calories_consumed", "note"]].copy()
         editor_df["date"] = pd.to_datetime(editor_df["date"]).dt.date
         editor_df["calories_consumed"] = editor_df["calories_consumed"].round().astype(int)
+        editor_df["note"] = editor_df["note"].fillna("").astype(str)
         editor_df["delete"] = False
 
         edited_df = st.data_editor(
@@ -515,11 +633,21 @@ with tab_entries:
                 "calories_consumed": st.column_config.NumberColumn(
                     "Calories Consumed", min_value=0, max_value=10000, step=1
                 ),
+                "note": st.column_config.TextColumn("Note"),
                 "delete": st.column_config.CheckboxColumn("Delete"),
             },
         )
 
-        def apply_edits(df: pd.DataFrame) -> None:
+        def apply_edits(df: pd.DataFrame, original_df: pd.DataFrame) -> None:
+            original_df = original_df.copy()
+            original_df["date"] = pd.to_datetime(original_df["date"]).dt.date
+            original_map = {}
+            for _, row in original_df.iterrows():
+                original_map[row["date"]] = (
+                    int(round(row["calories_consumed"])),
+                    None if pd.isna(row.get("note")) else str(row.get("note")),
+                )
+            restores: list[tuple[str, int, str | None]] = []
             for _, row in df.iterrows():
                 date_val = row.get("date")
                 if pd.isna(date_val):
@@ -533,41 +661,122 @@ with tab_entries:
                 else:
                     continue
 
+                date_key = pd.to_datetime(date_str).date()
+                prev = original_map.get(date_key)
+                prev_cals = prev[0] if prev else None
+                prev_note = prev[1] if prev else None
+                note_val = row.get("note")
+                if pd.isna(note_val):
+                    note_val = None
+                else:
+                    note_val = str(note_val).strip() or None
+
                 if row.get("delete") == True:
-                    db.delete_daily_log(user_id, date_str)
+                    if prev_cals is not None:
+                        restores.append((date_str, int(prev_cals), prev_note))
+                    db.delete_daily_log(date_str)
                     continue
                 if pd.isna(row.get("calories_consumed")):
                     continue
                 calories = int(round(row["calories_consumed"]))
+                if prev_cals is not None and (
+                    calories != int(prev_cals) or note_val != prev_note
+                ):
+                    restores.append((date_str, int(prev_cals), prev_note))
                 daily_bal = calc.daily_balance(maintenance, calories)
-                db.upsert_daily_log(user_id, date_str, calories, daily_bal)
-            db.update_running_balances(user_id)
+                db.upsert_daily_log(date_str, calories, daily_bal, note_val)
+            db.update_running_balances()
+            st.session_state["last_change_restore"] = restores
             st.success("Entries updated.")
             st.rerun()
 
         delete_count = int(edited_df["delete"].fillna(False).sum())
         if delete_count > 0:
             st.warning(f"{delete_count} entries marked for deletion.")
-            if st.button("Delete Selected"):
-                st.session_state["pending_edits"] = edited_df.to_dict("records")
-                st.session_state["show_delete_confirm"] = True
-        else:
+        action_cols = st.columns(2)
+        with action_cols[0]:
             if st.button("Save Changes"):
-                apply_edits(edited_df)
+                apply_edits(edited_df, logs_df)
+        with action_cols[1]:
+            if st.session_state.get("last_change_restore"):
+                if st.button("Undo Last Change"):
+                    for date_str, calories, note_val in st.session_state["last_change_restore"]:
+                        daily_bal = calc.daily_balance(maintenance, calories)
+                        db.upsert_daily_log(date_str, calories, daily_bal, note_val)
+                    db.update_running_balances()
+                    st.session_state["last_change_restore"] = []
+                    st.success("Last change undone.")
+                    st.rerun()
 
-        if st.session_state.get("show_delete_confirm"):
-            pending_records = st.session_state.get("pending_edits", [])
-            pending_df = pd.DataFrame(pending_records) if pending_records else pd.DataFrame()
-            delete_count = int(pending_df["delete"].sum()) if not pending_df.empty else 0
-            st.warning(f"This will permanently delete {delete_count} entries.")
-            col_confirm, col_cancel = st.columns(2)
-            with col_confirm:
-                if st.button("Confirm delete"):
-                    st.session_state.pop("show_delete_confirm", None)
-                    st.session_state.pop("pending_edits", None)
-                    apply_edits(pending_df)
-            with col_cancel:
-                if st.button("Cancel"):
-                    st.session_state.pop("show_delete_confirm", None)
-                    st.session_state.pop("pending_edits", None)
+with tab_simulation:
+    st.subheader("Simulation")
+    st.caption("Adjust calories and see how your timeline to goal changes.")
+
+    logs_df_sim = db.get_daily_logs()
+    if not logs_df_sim.empty:
+        logs_df_sim = logs_df_sim.sort_values("date")
+        running_balance_sim = float(logs_df_sim["running_balance"].iloc[-1])
+    else:
+        running_balance_sim = 0.0
+
+    current_estimated_weight = calc.estimated_weight(starting_weight, running_balance_sim)
+
+    weight_basis = st.radio(
+        "Starting point",
+        ["Current estimated weight", "Starting weight"],
+        horizontal=True,
+    )
+    if weight_basis == "Current estimated weight":
+        sim_start_weight = current_estimated_weight
+    else:
+        sim_start_weight = starting_weight
+
+    target_weight_sim = (
+        float(profile["target_weight_lbs"])
+        if profile.get("target_weight_lbs") is not None
+        else starting_weight
+    )
+
+    sim_start_date = st.date_input("Start date", value=dt.date.today())
+    if goal_type == "Lose":
+        sim_default_calories = int(math.floor(maintenance / 1000.0) * 1000)
+    else:
+        sim_default_calories = int(math.ceil(maintenance / 1000.0) * 1000)
+
+    sim_calories = st.number_input(
+        "Planned daily calories",
+        min_value=0,
+        max_value=12000,
+        value=sim_default_calories,
+        step=50,
+    )
+
+    daily_balance_sim = calc.daily_balance(maintenance, float(sim_calories))
+    if goal_type == "Lose":
+        daily_progress = daily_balance_sim
+        pace_label = "Estimated weekly loss"
+    else:
+        daily_progress = -daily_balance_sim
+        pace_label = "Estimated weekly gain"
+
+    goal_calories_sim = abs(sim_start_weight - target_weight_sim) * 3500.0
+
+    if goal_calories_sim == 0:
+        st.info("You're already at your goal weight.")
+    elif daily_progress <= 0:
+        st.warning("At this intake, you're not on track for your goal.")
+    else:
+        est_days = max(1, math.ceil(goal_calories_sim / daily_progress))
+        if est_days > 365:
+            st.warning("At this intake, you're not on track for your goal.")
+        else:
+            finish_date = sim_start_date + dt.timedelta(days=est_days)
+            weekly_change = (daily_progress * 7) / 3500.0
+            change_unit = "lbs"
+
+            sim_col1, sim_col2, sim_col3 = st.columns(3)
+            sim_col1.metric("Estimated days to goal", f"{est_days}")
+            sim_col2.metric("Estimated finish date", finish_date.strftime("%b %d, %Y"))
+            sim_col3.metric(pace_label, f"{weekly_change:,.2f} {change_unit}")
+
 
