@@ -33,7 +33,7 @@ If you prefer a double-click launcher, use:
 `run_calorie_bank.bat`
 
 ## Data Storage
-All data is stored locally in `calorie_bank.db`. This file is ignored by Git so your personal data is not committed.
+All data is stored locally in `user_data.db`. This file is ignored by Git so your personal data is not committed.
 
 ## Screenshots
 Add screenshots here to showcase the app:

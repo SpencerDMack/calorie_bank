@@ -3,6 +3,7 @@ from __future__ import annotations
 import datetime as dt
 import math
 
+import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
@@ -160,7 +161,13 @@ with tab_dashboard:
     remaining_calories = max(0.0, goal_calories - max(0.0, bank_balance))
     avg_daily_progress = None
     if not logs_df.empty:
-        recent = logs_df.tail(7)
+        recent_df = logs_df.copy()
+        recent_df["date"] = pd.to_datetime(recent_df["date"]).dt.date
+        last_date = recent_df["date"].max()
+        month_start = last_date - dt.timedelta(days=29)
+        recent = recent_df[
+            (recent_df["date"] >= month_start) & (recent_df["date"] <= last_date)
+        ]
         if goal_type == "Lose":
             daily_progress = recent["daily_balance"]
         else:
@@ -236,7 +243,7 @@ with tab_dashboard:
 
         st.metric("Estimated days to goal", days_text)
         if goal_calories > 0 and avg_daily_progress is not None and avg_daily_progress > 0:
-            st.caption("Based on your average over the last 7 entries.")
+            st.caption("Based on your average over the last 30 days.")
 
     with right_col:
         st.subheader("Profile Summary")
@@ -282,7 +289,11 @@ with tab_dashboard:
         pre_fill_note = ""
 
         with st.form("daily_entry_form"):
-            entry_date = st.date_input("Date", value=today)
+            entry_date = st.date_input(
+                "Date",
+                value=today,
+                format="MM/DD/YYYY",
+            )
             calories_consumed = st.number_input(
                 "Calories consumed",
                 min_value=0,
@@ -305,7 +316,6 @@ with tab_dashboard:
             st.rerun()
 
         st.subheader("Weekly Win")
-        today = dt.date.today()
         weekly_logs = db.get_daily_logs()
         if weekly_logs.empty:
             st.info("Log at least one day to see your weekly summary.")
@@ -314,21 +324,32 @@ with tab_dashboard:
             weekly_df["date"] = pd.to_datetime(weekly_df["date"]).dt.date
             first_log_date = weekly_df["date"].min()
             last_log_date = weekly_df["date"].max()
-            week_end = last_log_date
-            days_since_start = (week_end - first_log_date).days
-            if days_since_start < 0:
-                week_start = first_log_date
-            else:
-                week_start = first_log_date + dt.timedelta(
-                    days=(days_since_start // 7) * 7
+            week_starts = []
+            current_week = first_log_date
+            while current_week <= last_log_date:
+                week_starts.append(current_week)
+                current_week += dt.timedelta(days=7)
+            default_index = len(week_starts) - 1
+            current_week_start = week_starts[default_index]
+            def _format_week_label(d: dt.date) -> str:
+                prefix = "Current - " if d == current_week_start else ""
+                return (
+                    f"{prefix}{d.strftime('%b %d, %Y')} - "
+                    f"{(d + dt.timedelta(days=6)).strftime('%b %d, %Y')}"
                 )
+            week_start = st.selectbox(
+                "Week",
+                week_starts,
+                index=default_index,
+                format_func=_format_week_label,
+            )
             week_end_display = week_start + dt.timedelta(days=6)
             weekly_df = weekly_df[
                 (weekly_df["date"] >= week_start) & (weekly_df["date"] <= week_end_display)
             ]
 
             if weekly_df.empty:
-                st.info("No entries in the last 7 days yet.")
+                st.info("No entries in the selected week yet.")
             else:
                 if goal_type == "Lose":
                     summary_label = "Weekly deficit"
@@ -364,143 +385,199 @@ with tab_dashboard:
             ).round(1)
 
             st.subheader("Progress Over Time")
+            if "show_weekly_slope" not in st.session_state:
+                st.session_state["show_weekly_slope"] = False
+            st.toggle("Show weekly slope", key="show_weekly_slope")
+            show_weekly_slope = st.session_state["show_weekly_slope"]
 
             fig_weight = go.Figure()
-            fig_weight.add_trace(
-                go.Scatter(
-                    x=logs_df["date"],
-                    y=logs_df["estimated_weight"],
-                    customdata=logs_df["calories_consumed"],
-                    mode="lines+markers",
-                    marker=dict(size=8),
-                    name="Estimated Weight (lbs)",
-                    hovertemplate=(
-                        "Date: %{x|%b %d, %Y}"
-                        "<br>Weight: %{y:.1f} lbs"
-                        "<br>Calories: %{customdata:.0f}"
-                        "<extra></extra>"
-                    ),
-                )
-            )
-            # Highlight global and weekly min/max points
-            highlight_df = logs_df.dropna(
-                subset=["estimated_weight", "calories_consumed"]
-            ).copy()
-            if not highlight_df.empty:
-                first_log_date = highlight_df["date"].dt.date.min()
-                last_log_date = highlight_df["date"].dt.date.max()
-                week_end = last_log_date
-                days_since_start = (week_end - first_log_date).days
-                if days_since_start < 0:
-                    week_start = first_log_date
-                else:
-                    week_start = first_log_date + dt.timedelta(
-                        days=(days_since_start // 7) * 7
+            if not show_weekly_slope:
+                fig_weight.add_trace(
+                    go.Scatter(
+                        x=logs_df["date"],
+                        y=logs_df["estimated_weight"],
+                        customdata=logs_df["calories_consumed"],
+                        mode="lines+markers",
+                        marker=dict(size=8),
+                        line=dict(width=2),
+                        name="Estimated Weight (lbs)",
+                        hovertemplate=(
+                            "Date: %{x|%b %d, %Y}"
+                            "<br>Weight: %{y:.1f} lbs"
+                            "<br>Calories: %{customdata:.0f}"
+                            "<extra></extra>"
+                        ),
                     )
-                week_end_display = week_start + dt.timedelta(days=6)
-
-                global_min_idx = highlight_df["estimated_weight"].idxmin()
-                global_max_idx = highlight_df["estimated_weight"].idxmax()
-
-                weekly_mask = (
-                    (highlight_df["date"].dt.date >= week_start)
-                    & (highlight_df["date"].dt.date <= week_end_display)
-                )
-                weekly_df = highlight_df[weekly_mask]
-                weekly_min_idx = (
-                    weekly_df["estimated_weight"].idxmin() if not weekly_df.empty else None
-                )
-                weekly_max_idx = (
-                    weekly_df["estimated_weight"].idxmax() if not weekly_df.empty else None
                 )
 
-                highlights: dict[int, dict] = {}
+            if show_weekly_slope and len(logs_df) >= 2:
+                slope_df = logs_df.copy()
+                slope_df["date_only"] = slope_df["date"].dt.date
+                first_log_date = slope_df["date_only"].min()
 
-                def add_highlight(idx: int | None, label: str, color: str, priority: int, symbol: str) -> None:
-                    if idx is None:
-                        return
-                    row = highlight_df.loc[idx]
-                    entry = highlights.get(idx)
-                    if entry is None:
-                        highlights[idx] = {
-                            "x": row["date"],
-                            "y": row["estimated_weight"],
-                            "calories": row["calories_consumed"],
-                            "labels": [label],
-                            "priority": priority,
-                            "color": color,
-                        }
-                        return
-                    entry["labels"].append(label)
-                    if priority < entry["priority"]:
-                        entry["priority"] = priority
-                        entry["color"] = color
-
-                if global_min_idx == global_max_idx:
-                    add_highlight(
-                        global_min_idx,
-                        "Highest/Lowest Weight",
-                        "mediumpurple",
-                        0,
-                        "circle",
+                def week_start_for(date_val: dt.date) -> dt.date:
+                    return first_log_date + dt.timedelta(
+                        days=((date_val - first_log_date).days // 7) * 7
                     )
-                else:
-                    add_highlight(global_min_idx, "Lowest Weight", "royalblue", 0, "circle")
-                    add_highlight(global_max_idx, "Highest Weight", "goldenrod", 0, "circle")
 
-                if (
-                    weekly_min_idx == weekly_max_idx
-                    and weekly_min_idx is not None
-                    and weekly_min_idx not in {global_min_idx, global_max_idx}
-                ):
-                    add_highlight(
-                        weekly_min_idx,
-                        "Week Min/Max",
-                        "seagreen",
-                        1,
-                        "circle",
-                    )
-                else:
-                    if weekly_min_idx not in {global_min_idx, global_max_idx}:
-                        add_highlight(weekly_min_idx, "Weekly Min", "seagreen", 1, "circle")
-                    if weekly_max_idx not in {global_min_idx, global_max_idx}:
-                        add_highlight(weekly_max_idx, "Weekly Max", "darkorange", 1, "circle")
+                slope_df["week_start"] = slope_df["date_only"].apply(week_start_for)
 
-                for entry in highlights.values():
-                    label_text = " / ".join(entry["labels"])
+                for _, group in slope_df.groupby("week_start"):
+                    if len(group) < 2:
+                        continue
+                    group = group.sort_values("date")
+                    x_vals = group["date_only"].apply(lambda d: d.toordinal()).to_numpy()
+                    y_vals = group["estimated_weight"].to_numpy()
+                    slope, intercept = np.polyfit(x_vals, y_vals, 1)
+                    slope_week = slope * 7
+                    x0 = x_vals.min()
+                    x1 = x_vals.max()
+                    y0 = slope * x0 + intercept
+                    y1 = slope * x1 + intercept
+                    d0 = group["date_only"].min()
+                    d1 = group["date_only"].max()
+                    max_rate = 2.0
+                    abs_rate = abs(slope_week)
+                    intensity = min(abs_rate / max_rate, 1.0)
+                    if abs_rate < 0.02:
+                        line_color = "rgba(255,255,255,0.9)"
+                    else:
+                        is_good = slope_week < 0 if goal_type == "Lose" else slope_week > 0
+                        target = (46, 125, 50) if is_good else (198, 40, 40)
+                        r = int(255 + (target[0] - 255) * intensity)
+                        g = int(255 + (target[1] - 255) * intensity)
+                        b = int(255 + (target[2] - 255) * intensity)
+                        line_color = f"rgba({r},{g},{b},0.9)"
                     fig_weight.add_trace(
                         go.Scatter(
-                            x=[entry["x"]],
-                            y=[entry["y"]],
-                            mode="markers+text",
-                            marker=dict(
-                                size=8,
-                                color=entry["color"],
-                                symbol="circle",
-                            ),
-                            text=[f"<b>{label_text}</b>"],
-                            textposition="top center",
+                            x=[d0, d1],
+                            y=[y0, y1],
+                            mode="lines",
+                            line=dict(color=line_color, width=3),
                             showlegend=False,
-                            customdata=[entry["calories"]],
-                            hovertemplate=(
-                                "Date: %{x|%b %d, %Y}"
-                                "<br>Weight: %{y:.1f} lbs"
-                                "<br>Calories: %{customdata:.0f}"
-                                f"<br>{label_text}"
-                                "<extra></extra>"
-                            ),
+                            hovertemplate=f"Slope: {slope_week:+.2f} lbs/week<extra></extra>",
                         )
                     )
-            if total_weight_change > 0:
-                for pct in [0.25, 0.5, 0.75]:
-                    milestone_weight = starting_weight + (target_weight - starting_weight) * pct
-                    fig_weight.add_hline(
-                        y=milestone_weight,
-                        line_dash="dot",
-                        line_color="rgba(120,120,120,0.6)",
-                        annotation_text=f"{int(pct * 100)}%",
-                        annotation_position="top right",
+                    fig_weight.add_trace(
+                        go.Scatter(
+                            x=[d1],
+                            y=[y1],
+                            mode="markers",
+                            marker=dict(size=6, color=line_color),
+                            showlegend=False,
+                            hovertemplate=f"Slope: {slope_week:+.2f} lbs/week<extra></extra>",
+                        )
                     )
+            # Highlight global and weekly min/max points
+            if not show_weekly_slope:
+                highlight_df = logs_df.dropna(
+                    subset=["estimated_weight", "calories_consumed"]
+                ).copy()
+                if not highlight_df.empty:
+                    first_log_date = highlight_df["date"].dt.date.min()
+                    last_log_date = highlight_df["date"].dt.date.max()
+                    week_end = last_log_date
+                    days_since_start = (week_end - first_log_date).days
+                    if days_since_start < 0:
+                        week_start = first_log_date
+                    else:
+                        week_start = first_log_date + dt.timedelta(
+                            days=(days_since_start // 7) * 7
+                        )
+                    week_end_display = week_start + dt.timedelta(days=6)
+
+                    global_min_idx = highlight_df["estimated_weight"].idxmin()
+                    global_max_idx = highlight_df["estimated_weight"].idxmax()
+
+                    weekly_mask = (
+                        (highlight_df["date"].dt.date >= week_start)
+                        & (highlight_df["date"].dt.date <= week_end_display)
+                    )
+                    weekly_df = highlight_df[weekly_mask]
+                    weekly_min_idx = (
+                        weekly_df["estimated_weight"].idxmin() if not weekly_df.empty else None
+                    )
+                    weekly_max_idx = (
+                        weekly_df["estimated_weight"].idxmax() if not weekly_df.empty else None
+                    )
+
+                    highlights: dict[int, dict] = {}
+
+                    def add_highlight(idx: int | None, label: str, color: str, priority: int, symbol: str) -> None:
+                        if idx is None:
+                            return
+                        row = highlight_df.loc[idx]
+                        entry = highlights.get(idx)
+                        if entry is None:
+                            highlights[idx] = {
+                                "x": row["date"],
+                                "y": row["estimated_weight"],
+                                "calories": row["calories_consumed"],
+                                "labels": [label],
+                                "priority": priority,
+                                "color": color,
+                            }
+                            return
+                        entry["labels"].append(label)
+                        if priority < entry["priority"]:
+                            entry["priority"] = priority
+                            entry["color"] = color
+
+                    if global_min_idx == global_max_idx:
+                        add_highlight(
+                            global_min_idx,
+                            "Highest/Lowest Weight",
+                            "mediumpurple",
+                            0,
+                            "circle",
+                        )
+                    else:
+                        add_highlight(global_min_idx, "Lowest Weight", "royalblue", 0, "circle")
+                        add_highlight(global_max_idx, "Highest Weight", "goldenrod", 0, "circle")
+
+                    if (
+                        weekly_min_idx == weekly_max_idx
+                        and weekly_min_idx is not None
+                        and weekly_min_idx not in {global_min_idx, global_max_idx}
+                    ):
+                        add_highlight(
+                            weekly_min_idx,
+                            "Week Min/Max",
+                            "seagreen",
+                            1,
+                            "circle",
+                        )
+                    else:
+                        if weekly_min_idx not in {global_min_idx, global_max_idx}:
+                            add_highlight(weekly_min_idx, "Weekly Min", "seagreen", 1, "circle")
+                        if weekly_max_idx not in {global_min_idx, global_max_idx}:
+                            add_highlight(weekly_max_idx, "Weekly Max", "darkorange", 1, "circle")
+
+                    for entry in highlights.values():
+                        label_text = " / ".join(entry["labels"])
+                        fig_weight.add_trace(
+                            go.Scatter(
+                                x=[entry["x"]],
+                                y=[entry["y"]],
+                                mode="markers+text",
+                                marker=dict(
+                                    size=8,
+                                    color=entry["color"],
+                                    symbol="circle",
+                                ),
+                                text=[f"<b>{label_text}</b>"],
+                                textposition="top center",
+                                showlegend=False,
+                                customdata=[entry["calories"]],
+                                hovertemplate=(
+                                    "Date: %{x|%b %d, %Y}"
+                                    "<br>Weight: %{y:.1f} lbs"
+                                    "<br>Calories: %{customdata:.0f}"
+                                    f"<br>{label_text}"
+                                    "<extra></extra>"
+                                ),
+                            )
+                        )
             fig_weight.update_layout(
                 yaxis_title="Estimated Weight (lbs)",
                 margin=dict(l=40, r=40, t=40, b=40),
@@ -580,7 +657,9 @@ with tab_dashboard:
                     num_rows="fixed",
                     disabled=["week_start", "predicted", "diff"],
                     column_config={
-                        "week_start": st.column_config.DateColumn("Week Start"),
+                        "week_start": st.column_config.DateColumn(
+                            "Week Start", format="MM/DD/YYYY"
+                        ),
                         "predicted": st.column_config.NumberColumn(
                             f"Predicted ({weight_unit})", format="%.1f"
                         ),
@@ -629,7 +708,7 @@ with tab_entries:
             use_container_width=True,
             num_rows="fixed",
             column_config={
-                "date": st.column_config.DateColumn("Date"),
+                "date": st.column_config.DateColumn("Date", format="MM/DD/YYYY"),
                 "calories_consumed": st.column_config.NumberColumn(
                     "Calories Consumed", min_value=0, max_value=10000, step=1
                 ),

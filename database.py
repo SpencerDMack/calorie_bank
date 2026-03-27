@@ -7,7 +7,7 @@ from typing import Optional
 
 import pandas as pd
 
-DB_PATH = os.path.join(os.path.dirname(__file__), "calorie_bank.db")
+DB_PATH = os.path.join(os.path.dirname(__file__), "user_data.db")
 
 
 def get_connection() -> sqlite3.Connection:
